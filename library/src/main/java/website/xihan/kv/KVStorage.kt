@@ -57,7 +57,7 @@ object KVStorage : KoinComponent {
         return getLock(kvId).write {
             try {
                 getPrefs(kvId).edit(true) { remove(key) }
-                KVSyncManager.notifyChange(kvId, key)
+                KVSyncManager.notifyChange(kvId, key, null, "null")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to remove key: $key", e)
@@ -71,7 +71,7 @@ object KVStorage : KoinComponent {
         return getLock(kvId).write {
             try {
                 getPrefs(kvId).edit(true) { putString(key, value) }
-                KVSyncManager.notifyChange(kvId, key)
+                KVSyncManager.notifyChange(kvId, key, value, "string")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to put string: $key", e)
@@ -96,7 +96,7 @@ object KVStorage : KoinComponent {
         return getLock(kvId).write {
             try {
                 getPrefs(kvId).edit(true) { putInt(key, value) }
-                KVSyncManager.notifyChange(kvId, key)
+                KVSyncManager.notifyChange(kvId, key, value, "int")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to put int: $key", e)
@@ -121,7 +121,7 @@ object KVStorage : KoinComponent {
         return getLock(kvId).write {
             try {
                 getPrefs(kvId).edit(true) { putLong(key, value) }
-                KVSyncManager.notifyChange(kvId, key)
+                KVSyncManager.notifyChange(kvId, key, value, "long")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to put long: $key", e)
@@ -146,7 +146,7 @@ object KVStorage : KoinComponent {
         return getLock(kvId).write {
             try {
                 getPrefs(kvId).edit(true) { putBoolean(key, value) }
-                KVSyncManager.notifyChange(kvId, key)
+                KVSyncManager.notifyChange(kvId, key, value, "boolean")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to put boolean: $key", e)
@@ -171,7 +171,7 @@ object KVStorage : KoinComponent {
         return getLock(kvId).write {
             try {
                 getPrefs(kvId).edit(true) { putFloat(key, value) }
-                KVSyncManager.notifyChange(kvId, key)
+                KVSyncManager.notifyChange(kvId, key, value, "float")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to put float: $key", e)
@@ -196,7 +196,7 @@ object KVStorage : KoinComponent {
         return getLock(kvId).write {
             try {
                 getPrefs(kvId).edit(true) { putLong(key, value.toRawBits()) }
-                KVSyncManager.notifyChange(kvId, key)
+                KVSyncManager.notifyChange(kvId, key, value, "double")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to put double: $key", e)
@@ -222,7 +222,7 @@ object KVStorage : KoinComponent {
         return getLock(kvId).write {
             try {
                 getPrefs(kvId).edit(true) { putStringSet(key, value) }
-                KVSyncManager.notifyChange(kvId, key)
+                KVSyncManager.notifyChange(kvId, key, value.joinToString(","), "stringset")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to put string set: $key", e)

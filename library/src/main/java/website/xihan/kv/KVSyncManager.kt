@@ -14,6 +14,8 @@ object KVSyncManager : KoinComponent {
     private const val ACTION_KV_CHANGED = "website.xihan.kv.KV_CHANGED"
     private const val EXTRA_KV_ID = "kvId"
     private const val EXTRA_KEY = "key"
+    private const val EXTRA_VALUE = "value"
+    private const val EXTRA_VALUE_TYPE = "valueType"
     private const val TAG = "KVSyncManager"
 
     private val context: Context by inject()
@@ -27,17 +29,16 @@ object KVSyncManager : KoinComponent {
         targetPackages.addAll(packages)
     }
 
-    /**
-     * 通知配置变化
-     */
-    fun notifyChange(kvId: String, key: String) {
+    fun notifyChange(kvId: String, key: String, value: Any? = null, valueType: String = "null") {
         try {
             val intent = Intent(ACTION_KV_CHANGED).apply {
                 putExtra(EXTRA_KV_ID, kvId)
                 putExtra(EXTRA_KEY, key)
+                putExtra(EXTRA_VALUE, value?.toString())
+                putExtra(EXTRA_VALUE_TYPE, valueType)
                 addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             }
-            
+
             if (targetPackages.isEmpty()) {
                 context.sendBroadcast(intent)
             } else {
@@ -54,4 +55,6 @@ object KVSyncManager : KoinComponent {
     fun getChangeAction(): String = ACTION_KV_CHANGED
     fun getKvIdExtra(): String = EXTRA_KV_ID
     fun getKeyExtra(): String = EXTRA_KEY
+    fun getValueExtra(): String = EXTRA_VALUE
+    fun getValueTypeExtra(): String = EXTRA_VALUE_TYPE
 }

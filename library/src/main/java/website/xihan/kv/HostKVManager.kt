@@ -35,6 +35,8 @@ object HostKVManager : KoinComponent {
     private const val ACTION_KV_CHANGED = "${MODULE_AUTHORITY}.KV_CHANGED"
     private const val EXTRA_KV_ID = "kvId"
     private const val EXTRA_KEY = "key"
+    private const val EXTRA_VALUE = "value"
+    private const val EXTRA_VALUE_TYPE = "valueType"
     private const val TAG = "HostKVManager"
 
     /**
@@ -92,6 +94,8 @@ object HostKVManager : KoinComponent {
                     if (intent?.action == ACTION_KV_CHANGED) {
                         val changedKvId = intent.getStringExtra(EXTRA_KV_ID) ?: ""
                         val changedKey = intent.getStringExtra(EXTRA_KEY) ?: ""
+                        val valueStr = intent.getStringExtra(EXTRA_VALUE)
+                        val valueType = intent.getStringExtra(EXTRA_VALUE_TYPE) ?: "null"
 
                         // 处理清空所有数据
                         if (changedKey == "__CLEAR_ALL__") {
@@ -105,6 +109,18 @@ object HostKVManager : KoinComponent {
                             clearCacheForKvId(changedKvId)
                             notifyListenersForKvId(changedKvId)
                             return
+                        }
+
+                        val parsedValue: Any? = when (valueType) {
+                            "null" -> null
+                            "string" -> valueStr
+                            "int" -> valueStr?.toIntOrNull()
+                            "long" -> valueStr?.toLongOrNull()
+                            "boolean" -> valueStr?.toBooleanStrictOrNull()
+                            "float" -> valueStr?.toFloatOrNull()
+                            "double" -> valueStr?.toDoubleOrNull()
+                            "stringset" -> valueStr?.split(",")?.toSet()
+                            else -> valueStr
                         }
 
                         // 清除缓存
@@ -122,7 +138,7 @@ object HostKVManager : KoinComponent {
                                 true // 移除已被回收的引用
                             } else {
                                 try {
-                                    listener(changedKey, null)
+                                    listener(changedKey, parsedValue)
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Listener error", e)
                                 }
