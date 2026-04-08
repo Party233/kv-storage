@@ -107,3 +107,46 @@ dependencies {
 
     implementation(project(":library"))
 }
+
+val adbExecutable: String = androidComponents.sdkComponents.adb.get().asFile.absolutePath
+
+val restartApp = tasks.register("restartApp") {
+    group = "deployment"
+
+    doLast {
+        val packageName = "website.xihan.kv.storage"
+
+        ProcessBuilder(
+            adbExecutable, "shell", "am", "force-stop", packageName
+        ).redirectErrorStream(true).start().waitFor()
+
+        ProcessBuilder(
+            adbExecutable, "shell", "monkey", "-p", packageName,
+            "-c", "android.intent.category.LAUNCHER", "1"
+        ).redirectErrorStream(true).start().waitFor()
+
+        println("应用 $packageName 已重启")
+    }
+}
+
+tasks.register("restartAppDelayed") {
+    group = "deployment"
+
+    doLast {
+        val delayMs = project.findProperty("restartDelayMs")?.toString()?.toLongOrNull() ?: 3000L
+        Thread.sleep(delayMs)
+    }
+}
+
+afterEvaluate {
+    val delayedTask = tasks.named("restartAppDelayed")
+    val restartTask = tasks.named("restartApp")
+
+    listOf("installDebug", "installRelease").forEach { installTaskName ->
+        tasks.findByName(installTaskName)?.let {
+            tasks.named(installTaskName).configure { finalizedBy(delayedTask) }
+        }
+    }
+
+    delayedTask.configure { finalizedBy(restartTask) }
+}
