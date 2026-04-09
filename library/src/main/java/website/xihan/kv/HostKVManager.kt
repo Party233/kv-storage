@@ -11,48 +11,110 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.edit
 import androidx.core.net.toUri
+import org.json.JSONArray
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 /**
  * 宿主端KV管理器，通过systemContext访问模块的ContentProvider
  */
 object HostKVManager : KoinComponent {
 
-    private val systemContext: Context by inject()
-    private val cache = ConcurrentHashMap<String, LruCache<String, Any>>()
-    private val listeners =
-        ConcurrentHashMap<String, MutableList<WeakReference<(String, Any?) -> Unit>>>()
-    private var broadcastReceiver: BroadcastReceiver? = null
-    private var spCache: SharedPreferences? = null
-    private var enableSpCache = false
-    private var targetPackageName: String? = null
-    private var DEFAULT_CACHE_SIZE = 100
+    internal val systemContext: Context by inject()
+    internal val cache = ConcurrentHashMap<String, LruCache<String, Any>>()
+    internal val locks = ConcurrentHashMap<String, ReentrantReadWriteLock>()
+    internal val listeners = ConcurrentHashMap<String, MutableList<WeakReference<(String, Any?) -> Unit>>>()
+    internal var broadcastReceiver: BroadcastReceiver? = null
+    internal var spCache: SharedPreferences? = null
+    internal var enableSpCache = false
+    internal var moduleAuthority: String = "website.xihan.kv"
+    internal var defaultCacheSize = 100
+    internal val receiverLock = Any()
 
-    private const val MODULE_AUTHORITY = "website.xihan.kv"
-    private const val ACTION_KV_CHANGED = "${MODULE_AUTHORITY}.KV_CHANGED"
+    private const val TAG = "HostKVManager"
     private const val EXTRA_KV_ID = "kvId"
     private const val EXTRA_KEY = "key"
     private const val EXTRA_VALUE = "value"
     private const val EXTRA_VALUE_TYPE = "valueType"
-    private const val TAG = "HostKVManager"
 
-    /**
-     * 初始化宿主端KV管理器
-     * @param enableSharedPreferencesCache 是否启用SharedPreferences缓存
-     * @param modulePackageName 模块包名，用于广播目标包名
-     * @param cacheSize 内存缓存大小限制
-     */
+    enum class ValueType(val typeName: String) {
+        STRING("string"),
+        INT("int"),
+        LONG("long"),
+        BOOLEAN("boolean"),
+        FLOAT("float"),
+        DOUBLE("double"),
+        STRING_SET("stringset"),
+        CONTAINS("contains"),
+        REMOVE("remove"),
+        CLEAR("clear");
+
+        companion object {
+            fun from(value: Any?) = when (value) {
+                is String -> STRING
+                is Int -> INT
+                is Long -> LONG
+                is Boolean -> BOOLEAN
+                is Float -> FLOAT
+                is Double -> DOUBLE
+                is Set<*> -> if (value.all { it is String }) STRING_SET else STRING
+                else -> STRING
+            }
+        }
+    }
+
+    private fun lockOf(kvId: String) = locks.getOrPut(kvId) { ReentrantReadWriteLock() }
+
+    private inline fun <T> writeLocked(kvId: String, block: () -> T): T = lockOf(kvId).write(block)
+
+    private inline fun <T> readLocked(kvId: String, block: () -> T): T = lockOf(kvId).read(block)
+
+    private fun cacheOf(kvId: String) = cache.getOrPut(kvId) { LruCache(defaultCacheSize) }
+
+    private fun spKey(kvId: String, key: String) = "${kvId}_$key"
+
+    internal fun buildGetUri(kvId: String, key: String, type: String, default: String? = null): Uri =
+        "content://$moduleAuthority/get/$kvId/$key".toUri().buildUpon()
+            .appendQueryParameter("type", type)
+            .apply { default?.let { appendQueryParameter("default", it) } }
+            .build()
+
+    internal fun buildPutUri(kvId: String, key: String, type: String, value: String): Uri =
+        "content://$moduleAuthority/put/$kvId/$key".toUri().buildUpon()
+            .appendQueryParameter("type", type)
+            .appendQueryParameter("value", value)
+            .build()
+
+    internal inline fun <T> queryValue(uri: Uri, mapper: (String) -> T): T? =
+        systemContext.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) mapper(cursor.getString(0)) else null
+        }
+
+    internal fun insertValue(uri: Uri) = systemContext.contentResolver.insert(uri, null)
+
+    internal fun Set<String>.toJson() = JSONArray(this).toString()
+
+    internal fun String.parseJsonToSet(): Set<String> = try {
+        JSONArray(this).let { arr -> (0 until arr.length()).map(arr::getString).toSet() }
+    } catch (_: Exception) {
+        emptySet()
+    }
+
     fun init(
         enableSharedPreferencesCache: Boolean = false,
         modulePackageName: String? = null,
-        cacheSize: Int? = null
+        cacheSize: Int? = null,
+        moduleAuthority: String? = null
     ) {
         enableSpCache = enableSharedPreferencesCache
-        targetPackageName = modulePackageName
-        cacheSize?.let { DEFAULT_CACHE_SIZE = it }
+        cacheSize?.let { defaultCacheSize = it }
+        moduleAuthority?.let { this.moduleAuthority = it }
+            ?: modulePackageName?.let { this.moduleAuthority = "$it.kv" }
         if (enableSpCache) {
             spCache = systemContext.getSharedPreferences("kv_host_cache", Context.MODE_PRIVATE)
         }
@@ -60,601 +122,335 @@ object HostKVManager : KoinComponent {
         initBroadcastReceiver()
     }
 
-    /**
-     * 授予ContentProvider URI权限
-     */
     private fun grantUriPermissions() {
-        try {
-            val uri = "content://$MODULE_AUTHORITY".toUri()
+        runCatching {
+            val uri = "content://$moduleAuthority".toUri()
             systemContext.grantUriPermission(
                 systemContext.packageName,
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to grant URI permissions (may not be needed)", e)
+        }.onFailure { Log.w(TAG, "Failed to grant URI permissions", it) }
+    }
+
+    private fun notifyListener(listener: (String, Any?) -> Unit, key: String, value: Any?) {
+        runCatching { listener(key, value) }.onFailure { Log.e(TAG, "Listener error", it) }
+    }
+
+    private fun parseBroadcastValue(valueStr: String?, valueType: String): Any? = when (valueType) {
+        "null" -> null
+        "string" -> valueStr
+        "int" -> valueStr?.toIntOrNull()
+        "long" -> valueStr?.toLongOrNull()
+        "boolean" -> valueStr?.toBooleanStrictOrNull()
+        "float" -> valueStr?.toFloatOrNull()
+        "double" -> valueStr?.toDoubleOrNull()
+        "stringset" -> valueStr?.parseJsonToSet()
+        else -> valueStr
+    }
+
+    private fun invalidateKeyCache(kvId: String, key: String) {
+        writeLocked(kvId) { cacheOf(kvId).remove(key) }
+        if (enableSpCache) {
+            spCache?.edit(true) { remove(spKey(kvId, key)) }
         }
     }
 
-    /**
-     * 获取或创建缓存
-     */
-    private fun getCache(kvId: String): LruCache<String, Any> {
-        return cache.getOrPut(kvId) { LruCache(DEFAULT_CACHE_SIZE) }
+    private fun notifyKeyListeners(kvId: String, key: String, value: Any?) {
+        listeners["${kvId}_$key"]?.removeAll { ref ->
+            ref.get()?.let { listener ->
+                notifyListener(listener, key, value)
+                false
+            } ?: true
+        }
     }
 
-    /**
-     * 初始化广播接收器
-     */
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun initBroadcastReceiver() {
-        if (broadcastReceiver == null) {
+        synchronized(receiverLock) {
+            if (broadcastReceiver != null) return
+
+            val actionKvChanged = "$moduleAuthority.KV_CHANGED"
             broadcastReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action == ACTION_KV_CHANGED) {
-                        val changedKvId = intent.getStringExtra(EXTRA_KV_ID) ?: ""
-                        val changedKey = intent.getStringExtra(EXTRA_KEY) ?: ""
-                        val valueStr = intent.getStringExtra(EXTRA_VALUE)
-                        val valueType = intent.getStringExtra(EXTRA_VALUE_TYPE) ?: "null"
+                    if (intent?.action != actionKvChanged) return
 
-                        // 处理清空所有数据
-                        if (changedKey == "__CLEAR_ALL__") {
-                            clearCacheForKvId(changedKvId)
-                            notifyListenersForKvId(changedKvId)
-                            return
-                        }
+                    val kvId = intent.getStringExtra(EXTRA_KV_ID) ?: return
+                    val key = intent.getStringExtra(EXTRA_KEY) ?: return
+                    val valueStr = intent.getStringExtra(EXTRA_VALUE)
+                    val valueType = intent.getStringExtra(EXTRA_VALUE_TYPE) ?: "null"
 
-                        // 处理批量更新
-                        if (changedKey == "__BATCH_UPDATE__") {
-                            clearCacheForKvId(changedKvId)
-                            notifyListenersForKvId(changedKvId)
-                            return
-                        }
-
-                        val parsedValue: Any? = when (valueType) {
-                            "null" -> null
-                            "string" -> valueStr
-                            "int" -> valueStr?.toIntOrNull()
-                            "long" -> valueStr?.toLongOrNull()
-                            "boolean" -> valueStr?.toBooleanStrictOrNull()
-                            "float" -> valueStr?.toFloatOrNull()
-                            "double" -> valueStr?.toDoubleOrNull()
-                            "stringset" -> valueStr?.split(",")?.toSet()
-                            else -> valueStr
-                        }
-
-                        // 清除缓存
-                        getCache(changedKvId).remove(changedKey)
-                        if (enableSpCache) {
-                            val cacheKey = "${changedKvId}_$changedKey"
-                            spCache?.edit(true) { remove(cacheKey) }
-                        }
-
-                        // 通知监听器
-                        val listenerKey = "${changedKvId}_$changedKey"
-                        listeners[listenerKey]?.removeAll { ref ->
-                            val listener = ref.get()
-                            if (listener == null) {
-                                true // 移除已被回收的引用
-                            } else {
-                                try {
-                                    listener(changedKey, parsedValue)
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Listener error", e)
-                                }
-                                false
-                            }
-                        }
+                    if (key == "__CLEAR_ALL__") {
+                        clearCacheForKvId(kvId)
+                        notifyListenersForKvId(kvId)
+                        return
                     }
+
+                    val parsedValue = parseBroadcastValue(valueStr, valueType)
+
+                    invalidateKeyCache(kvId, key)
+                    notifyKeyListeners(kvId, key, parsedValue)
                 }
             }
 
-            try {
-                val filter = IntentFilter(ACTION_KV_CHANGED)
+            runCatching {
+                val filter = IntentFilter(actionKvChanged)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    systemContext.registerReceiver(
-                        broadcastReceiver, filter, Context.RECEIVER_EXPORTED
-                    )
+                    systemContext.registerReceiver(broadcastReceiver, filter, Context.RECEIVER_EXPORTED)
                 } else {
                     systemContext.registerReceiver(broadcastReceiver, filter)
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to register broadcast receiver", e)
-            }
+            }.onFailure { Log.e(TAG, "Failed to register broadcast receiver", it) }
         }
     }
 
-    /**
-     * 清除指定kvId的所有缓存
-     */
-    private fun clearCacheForKvId(kvId: String) {
-        cache[kvId]?.clear()
+    internal fun clearCacheForKvId(kvId: String) {
+        writeLocked(kvId) { cache[kvId]?.clear() }
         if (enableSpCache) {
-            val keysToRemove =
-                spCache?.all?.keys?.filter { it.startsWith("${kvId}_") } ?: emptyList()
-            spCache?.edit(true) {
-                keysToRemove.forEach { remove(it) }
-            }
+            spCache?.all?.keys
+                ?.filter { it.startsWith("${kvId}_") }
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { keys -> spCache?.edit(true) { keys.forEach(::remove) } }
         }
     }
 
-    /**
-     * 通知指定kvId的所有监听器
-     */
     private fun notifyListenersForKvId(kvId: String) {
-        listeners.keys.filter { it.startsWith("${kvId}_") }.forEach { listenerKey ->
-            listeners[listenerKey]?.removeAll { ref ->
-                val listener = ref.get()
-                if (listener == null) {
-                    true
-                } else {
-                    try {
-                        listener("", null)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Listener error", e)
-                    }
-                    false
+        listeners.keys
+            .filter { it.startsWith("${kvId}_") }
+            .forEach { listenerKey ->
+                listeners[listenerKey]?.removeAll { ref ->
+                    ref.get()?.let { listener ->
+                        notifyListener(listener, "", null)
+                        false
+                    } ?: true
                 }
             }
-        }
     }
 
-    /**
-     * 构建ContentProvider URI
-     */
-    private fun buildGetUri(kvId: String, key: String, type: String, default: String? = null): Uri {
-        val builder = "content://$MODULE_AUTHORITY/get/$kvId/$key".toUri().buildUpon()
-            .appendQueryParameter("type", type)
-        default?.let { builder.appendQueryParameter("default", it) }
-        return builder.build()
-    }
-
-    private fun buildPutUri(kvId: String, key: String, type: String, value: String): Uri {
-        return "content://$MODULE_AUTHORITY/put/$kvId/$key".toUri().buildUpon()
-            .appendQueryParameter("type", type).appendQueryParameter("value", value).build()
-    }
-
-    /**
-     * 获取SP缓存键
-     */
-    private fun getSpCacheKey(kvId: String, key: String): String = "${kvId}_$key"
-
-    /**
-     * 创建KV工具类实例
-     * @param kvId KV标识
-     * @param enableSharedPreferencesCache 是否为此实例启用SharedPreferences缓存，默认使用全局设置
-     * @param cacheSize 内存缓存大小
-     */
     fun createKVHelper(
         kvId: String = "SHARED_SETTINGS",
         enableSharedPreferencesCache: Boolean = enableSpCache,
-        cacheSize: Int = DEFAULT_CACHE_SIZE
+        cacheSize: Int = defaultCacheSize
     ): HostKVHelper {
-        if (!cache.containsKey(kvId)) {
-            cache[kvId] = LruCache(cacheSize)
-        }
-        return HostKVHelper(kvId, enableSharedPreferencesCache)
+        cache.getOrPut(kvId) { LruCache(cacheSize) }
+        locks.getOrPut(kvId) { ReentrantReadWriteLock() }
+        return HostKVHelper(this, kvId, enableSharedPreferencesCache)
     }
 
-    /**
-     * 宿主端KV工具类
-     */
-    class HostKVHelper(private val kvId: String, private val enableSpCache: Boolean) {
-
-        // String操作
-        fun putString(key: String, value: String) {
-            try {
-                val uri = buildPutUri(kvId, key, "string", value)
-                systemContext.contentResolver.insert(uri, null)
-                getCache(kvId).put(key, value)
-                if (enableSpCache) {
-                    val cacheKey = getSpCacheKey(kvId, key)
-                    spCache?.edit(true) { putString(cacheKey, value) }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        fun getString(key: String, default: String = ""): String {
-            getCache(kvId).get(key)?.let { return it as String }
-            if (enableSpCache) {
-                val cacheKey = getSpCacheKey(kvId, key)
-                spCache?.getString(cacheKey, null)?.let {
-                    getCache(kvId).put(key, it)
-                    return it
-                }
-            }
-            return try {
-                val uri = buildGetUri(kvId, key, "string", default)
-                val cursor = systemContext.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val value = it.getString(0)
-                        getCache(kvId).put(key, value)
-                        if (enableSpCache) {
-                            val cacheKey = getSpCacheKey(kvId, key)
-                            spCache?.edit(true) { putString(cacheKey, value) }
-                        }
-                        value
-                    } else default
-                } ?: default
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get string: $key", e)
-                default
-            }
-        }
-
-        // Int操作
-        fun putInt(key: String, value: Int) {
-            try {
-                val uri = buildPutUri(kvId, key, "int", value.toString())
-                systemContext.contentResolver.insert(uri, null)
-                getCache(kvId).put(key, value)
-                if (enableSpCache) {
-                    val cacheKey = getSpCacheKey(kvId, key)
-                    spCache?.edit(true) { putInt(cacheKey, value) }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        fun getInt(key: String, default: Int = 0): Int {
-            getCache(kvId).get(key)?.let { return it as Int }
-            if (enableSpCache) {
-                val cacheKey = getSpCacheKey(kvId, key)
-                if (spCache?.contains(cacheKey) == true) {
-                    val value = spCache?.getInt(cacheKey, default) ?: default
-                    getCache(kvId).put(key, value)
-                    return value
-                }
-            }
-            return try {
-                val uri = buildGetUri(kvId, key, "int", default.toString())
-                val cursor = systemContext.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val value = it.getString(0).toInt()
-                        getCache(kvId).put(key, value)
-                        if (enableSpCache) {
-                            val cacheKey = getSpCacheKey(kvId, key)
-                            spCache?.edit(true) { putInt(cacheKey, value) }
-                        }
-                        value
-                    } else default
-                } ?: default
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get int: $key", e)
-                default
-            }
-        }
-
-        // Long操作
-        fun putLong(key: String, value: Long) {
-            try {
-                val uri = buildPutUri(kvId, key, "long", value.toString())
-                systemContext.contentResolver.insert(uri, null)
-                getCache(kvId).put(key, value)
-                if (enableSpCache) {
-                    val cacheKey = getSpCacheKey(kvId, key)
-                    spCache?.edit(true) { putLong(cacheKey, value) }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        fun getLong(key: String, default: Long = 0L): Long {
-            getCache(kvId).get(key)?.let { return it as Long }
-            if (enableSpCache) {
-                val cacheKey = getSpCacheKey(kvId, key)
-                if (spCache?.contains(cacheKey) == true) {
-                    val value = spCache?.getLong(cacheKey, default) ?: default
-                    getCache(kvId).put(key, value)
-                    return value
-                }
-            }
-            return try {
-                val uri = buildGetUri(kvId, key, "long", default.toString())
-                val cursor = systemContext.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val value = it.getString(0).toLong()
-                        getCache(kvId).put(key, value)
-                        if (enableSpCache) {
-                            val cacheKey = getSpCacheKey(kvId, key)
-                            spCache?.edit(true) { putLong(cacheKey, value) }
-                        }
-                        value
-                    } else default
-                } ?: default
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get long: $key", e)
-                default
-            }
-        }
-
-        // Boolean操作
-        fun putBoolean(key: String, value: Boolean) {
-            try {
-                val uri = buildPutUri(kvId, key, "boolean", value.toString())
-                systemContext.contentResolver.insert(uri, null)
-                getCache(kvId).put(key, value)
-                if (enableSpCache) {
-                    val cacheKey = getSpCacheKey(kvId, key)
-                    spCache?.edit(true) { putBoolean(cacheKey, value) }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        fun getBoolean(key: String, default: Boolean = false): Boolean {
-            getCache(kvId).get(key)?.let { return it as Boolean }
-            if (enableSpCache) {
-                val cacheKey = getSpCacheKey(kvId, key)
-                if (spCache?.contains(cacheKey) == true) {
-                    val value = spCache?.getBoolean(cacheKey, default) ?: default
-                    getCache(kvId).put(key, value)
-                    return value
-                }
-            }
-            return try {
-                val uri = buildGetUri(kvId, key, "boolean", default.toString())
-                val cursor = systemContext.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val value = it.getString(0).toBoolean()
-                        getCache(kvId).put(key, value)
-                        if (enableSpCache) {
-                            val cacheKey = getSpCacheKey(kvId, key)
-                            spCache?.edit(true) { putBoolean(cacheKey, value) }
-                        }
-                        value
-                    } else default
-                } ?: default
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get boolean: $key", e)
-                default
-            }
-        }
-
-        // Float操作
-        fun putFloat(key: String, value: Float) {
-            try {
-                val uri = buildPutUri(kvId, key, "float", value.toString())
-                systemContext.contentResolver.insert(uri, null)
-                getCache(kvId).put(key, value)
-                if (enableSpCache) {
-                    val cacheKey = getSpCacheKey(kvId, key)
-                    spCache?.edit(true) { putFloat(cacheKey, value) }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        fun getFloat(key: String, default: Float = 0f): Float {
-            getCache(kvId).get(key)?.let { return it as Float }
-            if (enableSpCache) {
-                val cacheKey = getSpCacheKey(kvId, key)
-                if (spCache?.contains(cacheKey) == true) {
-                    val value = spCache?.getFloat(cacheKey, default) ?: default
-                    getCache(kvId).put(key, value)
-                    return value
-                }
-            }
-            return try {
-                val uri = buildGetUri(kvId, key, "float", default.toString())
-                val cursor = systemContext.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val value = it.getString(0).toFloat()
-                        getCache(kvId).put(key, value)
-                        if (enableSpCache) {
-                            val cacheKey = getSpCacheKey(kvId, key)
-                            spCache?.edit(true) { putFloat(cacheKey, value) }
-                        }
-                        value
-                    } else default
-                } ?: default
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get float: $key", e)
-                default
-            }
-        }
-
-        // Double操作
-        fun putDouble(key: String, value: Double) {
-            try {
-                val uri = buildPutUri(kvId, key, "double", value.toString())
-                systemContext.contentResolver.insert(uri, null)
-                getCache(kvId).put(key, value)
-                if (enableSpCache) {
-                    val cacheKey = getSpCacheKey(kvId, key)
-                    spCache?.edit(true) { putString(cacheKey, value.toString()) }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        fun getDouble(key: String, default: Double = 0.0): Double {
-            getCache(kvId).get(key)?.let { return it as Double }
-            if (enableSpCache) {
-                val cacheKey = getSpCacheKey(kvId, key)
-                if (spCache?.contains(cacheKey) == true) {
-                    val value = Double.fromBits(
-                        spCache?.getLong(cacheKey, default.toRawBits()) ?: default.toRawBits()
-                    )
-                    getCache(kvId).put(key, value)
-                    return value
-                }
-            }
-            return try {
-                val uri = buildGetUri(kvId, key, "double", default.toRawBits().toString())
-                val cursor = systemContext.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val value = Double.fromBits(it.getString(0).toLong())
-                        getCache(kvId).put(key, value)
-                        if (enableSpCache) {
-                            val cacheKey = getSpCacheKey(kvId, key)
-                            spCache?.edit(true) { putLong(cacheKey, value.toRawBits()) }
-                        }
-                        value
-                    } else default
-                } ?: default
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get double: $key", e)
-                default
-            }
-        }
-
-        /**
-         * 批量操作
-         */
-        fun putAll(values: Map<String, Any>) {
-            values.forEach { (key, value) ->
-                when (value) {
-                    is String -> putString(key, value)
-                    is Int -> putInt(key, value)
-                    is Long -> putLong(key, value)
-                    is Boolean -> putBoolean(key, value)
-                    is Float -> putFloat(key, value)
-                    is Double -> putDouble(key, value)
-                    else -> Log.w("", "Unsupported type for key: $key, value: $value")
-                }
-            }
-        }
-
-        /**
-         * 检查键是否存在
-         */
-        fun contains(key: String): Boolean {
-            return try {
-                val uri = buildGetUri(kvId, key, "contains", "")
-                val cursor = systemContext.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    it.moveToFirst() && it.getString(0) == "true"
-                } ?: false
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to check contains: $key", e)
-                false
-            }
-        }
-
-        /**
-         * 删除指定键
-         */
-        fun remove(key: String): Boolean {
-            return try {
-                val uri = buildPutUri(kvId, key, "remove", "")
-                systemContext.contentResolver.insert(uri, null)
-                getCache(kvId).remove(key)
-                if (enableSpCache) {
-                    val cacheKey = getSpCacheKey(kvId, key)
-                    spCache?.edit(true) { remove(cacheKey) }
-                }
-                true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to remove: $key", e)
-                false
-            }
-        }
-
-        /**
-         * 批量查询多个键（减少IPC次数）
-         */
-        fun getBatch(keys: Set<String>): Map<String, Any?> {
-            return try {
-                val result = mutableMapOf<String, Any?>()
-                keys.forEach { key ->
-                    // 先尝试从缓存获取
-                    getCache(kvId).get(key)?.let {
-                        result[key] = it
-                    } ?: run {
-                        // 缓存未命中，通过ContentProvider查询
-                        val uri = buildGetUri(kvId, key, "string", "")
-                        val cursor =
-                            systemContext.contentResolver.query(uri, null, null, null, null)
-                        cursor?.use {
-                            if (it.moveToFirst()) {
-                                val value = it.getString(0)
-                                result[key] = value
-                                getCache(kvId).put(key, value)
-                            }
-                        }
-                    }
-                }
-                result
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get batch", e)
-                emptyMap()
-            }
-        }
-
-        /**
-         * 添加变化监听器
-         */
-        fun addChangeListener(key: String, listener: (String, Any?) -> Unit) {
-            val listenerKey = "${kvId}_$key"
-            listeners.getOrPut(listenerKey) { mutableListOf() }.add(WeakReference(listener))
-        }
-
-        /**
-         * 移除变化监听器
-         */
-        fun removeChangeListener(key: String, listener: (String, Any?) -> Unit) {
-            val listenerKey = "${kvId}_$key"
-            listeners[listenerKey]?.removeAll { it.get() == listener || it.get() == null }
-        }
-
-        /**
-         * 清除缓存
-         */
-        fun clearCache() {
-            clearCacheForKvId(kvId)
-        }
-
-        /**
-         * 配置缓存大小
-         */
-        fun configureCacheSize(maxSize: Int) {
-            cache[kvId] = LruCache(maxSize)
-        }
-
-        /**
-         * 清除所有数据
-         */
-        fun clearAll(): Boolean {
-            return try {
-                val uri = buildPutUri(kvId, "__CLEAR_ALL__", "clear", "")
-                systemContext.contentResolver.insert(uri, null)
-                clearCache()
-                true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to clear all", e)
-                false
-            }
-        }
-    }
-
-    /**
-     * 释放资源
-     */
     fun release() {
-        broadcastReceiver?.let { receiver ->
-            try {
-                systemContext.unregisterReceiver(receiver)
+        synchronized(receiverLock) {
+            broadcastReceiver?.let { receiver ->
+                runCatching { systemContext.unregisterReceiver(receiver) }
+                    .onFailure { Log.e(TAG, "Failed to unregister receiver", it) }
                 broadcastReceiver = null
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to unregister receiver", e)
             }
         }
         cache.clear()
+        locks.clear()
         listeners.clear()
         spCache = null
+    }
+}
+
+/**
+ * 宿主端KV工具类
+ */
+class HostKVHelper internal constructor(
+    private val manager: HostKVManager,
+    private val kvId: String,
+    private val useSpCache: Boolean
+) {
+    private val cache get() = manager.cache.getOrPut(kvId) { LruCache(manager.defaultCacheSize) }
+    private val spCache get() = manager.spCache
+    private val lock get() = manager.locks.getOrPut(kvId) { ReentrantReadWriteLock() }
+
+    operator fun get(key: String): String? = getString(key)
+    operator fun set(key: String, value: String) = putString(key, value)
+
+    operator fun plusAssign(pair: Pair<String, Any>) = when (val value = pair.second) {
+        is String -> putString(pair.first, value)
+        is Int -> putInt(pair.first, value)
+        is Long -> putLong(pair.first, value)
+        is Boolean -> putBoolean(pair.first, value)
+        is Float -> putFloat(pair.first, value)
+        is Double -> putDouble(pair.first, value)
+        is Set<*> -> @Suppress("UNCHECKED_CAST") putStringSet(pair.first, value as Set<String>)
+        else -> Unit
+    }
+
+    private inline fun <T> writeLocked(block: () -> T): T = lock.write(block)
+    private inline fun <T> readLocked(block: () -> T): T = lock.read(block)
+
+    private fun spKey(key: String) = "${kvId}_$key"
+
+    private fun updateSpCache(key: String, value: Any) {
+        if (!useSpCache) return
+        spCache?.edit(true) {
+            val k = spKey(key)
+            when (value) {
+                is String -> putString(k, value)
+                is Int -> putInt(k, value)
+                is Long -> putLong(k, value)
+                is Boolean -> putBoolean(k, value)
+                is Float -> putFloat(k, value)
+                is Double -> putLong(k, value.toRawBits())
+                is Set<*> -> @Suppress("UNCHECKED_CAST") putStringSet(k, value as Set<String>)
+            }
+        }
+    }
+
+    private fun updateCache(key: String, value: Any) {
+        cache.put(key, value)
+        updateSpCache(key, value)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun <T> cached(key: String): T? = cache.get(key) as? T
+
+    private fun <T> spCached(key: String, default: T, getter: SharedPreferences.(String, T) -> T?): T? {
+        if (!useSpCache) return null
+        val k = spKey(key)
+        return if (spCache?.contains(k) == true) spCache?.getter(k, default) ?: default else null
+    }
+
+    private fun cachedDouble(key: String, default: Double): Double? {
+        val k = spKey(key)
+        return if (useSpCache && spCache?.contains(k) == true) {
+            Double.fromBits(spCache?.getLong(k, default.toRawBits()) ?: default.toRawBits())
+        } else {
+            null
+        }
+    }
+
+    private fun buildGetUri(key: String, type: String, default: String? = null) =
+        manager.buildGetUri(kvId, key, type, default)
+
+    private fun buildPutUri(key: String, type: String, value: String) =
+        manager.buildPutUri(kvId, key, type, value)
+
+    private inline fun <T> query(uri: Uri, mapper: (String) -> T): T? = manager.queryValue(uri, mapper)
+
+    private fun insert(uri: Uri) = manager.insertValue(uri)
+
+    private fun <T : Any> getValue(
+        key: String,
+        default: T,
+        type: String,
+        queryDefault: String,
+        spGetter: (SharedPreferences.(String, T) -> T?)? = null,
+        queryMapper: (String) -> T
+    ): T = readLocked {
+        cached<T>(key)
+            ?: spGetter?.let { getter -> spCached(key, default, getter) }
+            ?: query(buildGetUri(key, type, queryDefault), queryMapper)?.also { updateCache(key, it) }
+            ?: default
+    }
+
+    private fun <T : Any> putValue(
+        key: String,
+        value: T,
+        type: String,
+        encodedValue: String,
+    ) = writeLocked {
+        insert(buildPutUri(key, type, encodedValue))
+        updateCache(key, value)
+    }
+
+    fun putString(key: String, value: String) = putValue(key, value, "string", value)
+
+    fun getString(key: String, default: String = ""): String =
+        getValue(key, default, "string", default, spGetter = { k, d -> getString(k, d) }) { it }
+
+    fun putInt(key: String, value: Int) = putValue(key, value, "int", value.toString())
+
+    fun getInt(key: String, default: Int = 0): Int =
+        getValue(key, default, "int", default.toString(), spGetter = { k, d -> getInt(k, d) }) { it.toInt() }
+
+    fun putLong(key: String, value: Long) = putValue(key, value, "long", value.toString())
+
+    fun getLong(key: String, default: Long = 0L): Long =
+        getValue(key, default, "long", default.toString(), spGetter = { k, d -> getLong(k, d) }) { it.toLong() }
+
+    fun putBoolean(key: String, value: Boolean) = putValue(key, value, "boolean", value.toString())
+
+    fun getBoolean(key: String, default: Boolean = false): Boolean =
+        getValue(key, default, "boolean", default.toString(), spGetter = { k, d -> getBoolean(k, d) }) { it.toBoolean() }
+
+    fun putFloat(key: String, value: Float) = putValue(key, value, "float", value.toString())
+
+    fun getFloat(key: String, default: Float = 0f): Float =
+        getValue(key, default, "float", default.toString(), spGetter = { k, d -> getFloat(k, d) }) { it.toFloat() }
+
+    fun putDouble(key: String, value: Double) = putValue(key, value, "double", value.toRawBits().toString())
+
+    fun getDouble(key: String, default: Double = 0.0): Double = readLocked {
+        cached<Double>(key)
+            ?: cachedDouble(key, default)
+            ?: query(buildGetUri(key, "double", default.toRawBits().toString())) { Double.fromBits(it.toLong()) }
+                ?.also { updateCache(key, it) }
+            ?: default
+    }
+
+    fun putStringSet(key: String, value: Set<String>) = putValue(key, value, "stringset", with(manager) { value.toJson() })
+
+    @Suppress("UNCHECKED_CAST")
+    fun getStringSet(key: String, default: Set<String> = emptySet()): Set<String> = readLocked {
+        cached<Set<String>>(key)
+            ?: spCached(key, default) { k, _ -> getStringSet(k, emptySet())?.toSet() }
+            ?: query(buildGetUri(key, "stringset", with(manager) { default.toJson() })) { with(manager) { it.parseJsonToSet() } }
+                ?.also { updateCache(key, it) }
+            ?: default
+    }
+
+    private fun removeSpCache(key: String) {
+        if (!useSpCache) return
+        spCache?.edit(true) { remove(spKey(key)) }
+    }
+
+    private fun listenerKey(key: String) = "${kvId}_$key"
+
+    private fun containsValue(key: String): Boolean = query(buildGetUri(key, "contains", "")) { it == "true" } ?: false
+
+    private fun clearProtocolValue(key: String, type: String): Boolean = writeLocked {
+        runCatching {
+            insert(buildPutUri(key, type, ""))
+            cache.remove(key)
+            removeSpCache(key)
+            true
+        }.getOrElse { Log.e(TAG, "Failed to $type: $key", it); false }
+    }
+
+    private fun insertProtocolValue(key: String, type: String): Boolean = writeLocked {
+        runCatching {
+            insert(buildPutUri(key, type, ""))
+            cache.clear()
+            true
+        }.getOrElse { Log.e(TAG, "Failed to $type", it); false }
+    }
+
+    fun contains(key: String): Boolean = readLocked { containsValue(key) }
+
+    fun remove(key: String): Boolean = clearProtocolValue(key, "remove")
+
+    fun clearAll(): Boolean = insertProtocolValue("__CLEAR_ALL__", "clear")
+
+    fun addChangeListener(key: String, listener: (String, Any?) -> Unit) {
+        manager.listeners.getOrPut(listenerKey(key)) { mutableListOf() }.add(WeakReference(listener))
+    }
+
+    fun removeChangeListener(key: String, listener: (String, Any?) -> Unit) {
+        manager.listeners[listenerKey(key)]?.removeAll { it.get() == listener || it.get() == null }
+    }
+
+    fun clearCache() = manager.clearCacheForKvId(kvId)
+
+    fun configureCacheSize(maxSize: Int) = writeLocked {
+        manager.cache[kvId] = LruCache(maxSize)
+    }
+
+    fun keys(): Set<String> = cache.keys()
+
+    companion object {
+        private const val TAG = "HostKVHelper"
     }
 }

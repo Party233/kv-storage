@@ -68,8 +68,3 @@ open class KVOwner(override val kvId: String) : IKVOwner
  * 获取所有KV数据
  */
 fun IKVOwner.getAllKV(): Map<String, Any?> = KVStorage.getAllKV(kvId)
-
-/**
- * 批量设置KV数据
- */
-fun IKVOwner.putAllKV(values: Map<String, Any>) = KVStorage.putAll(kvId, values)

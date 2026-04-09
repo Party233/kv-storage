@@ -36,6 +36,46 @@ dependencies {
 
 ## 使用方法
 
+### 配置 Authority
+
+默认使用 `{packageName}.kv` 作为Authority，多应用共存无需额外配置。
+
+如需自定义：
+
+#### 模块端
+
+```xml
+<!-- AndroidManifest.xml -->
+<provider 
+    android:name="website.xihan.kv.KVContentProvider" 
+    android:authorities="com.yourapp.kv"
+    android:enabled="true" 
+    android:exported="true" />
+```
+
+```kotlin
+class MyApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        startKoin {
+            androidContext(this@MyApp)
+            androidLogger()
+        }
+        KVContentProvider.setAuthority("com.yourapp.kv")
+        KVSyncManager.setTargetPackages("website.xihan.kv.storage")
+    }
+}
+```
+
+#### 宿主端
+
+```kotlin
+HostKVManager.init(
+    enableSharedPreferencesCache = true,
+    modulePackageName = "com.yourapp.module"  // 模块应用包名，自动推导为 {包名}.kv
+)
+```
+
 ### 初始化
 
 #### 模块端有UI（推荐方式）
@@ -73,10 +113,12 @@ HostKVManager.init(enableSharedPreferencesCache = true, modulePackageName = Buil
 ```xml
 <provider 
     android:name="website.xihan.kv.KVContentProvider" 
-    android:authorities="website.xihan.kv"
+    android:authorities="${applicationId}.kv"
     android:enabled="true" 
     android:exported="true" />
 ```
+
+使用 `${applicationId}.kv` 自动适配包名，自定义Authority需调用 `KVContentProvider.setAuthority()`。
 
 ### Kotlin属性委托用法
 
@@ -260,7 +302,7 @@ fileReceiver.receiveFile(targetDir = customDir)
 **解决方案**:
 
 - 确保模块端已在 AndroidManifest.xml 中注册 `KVContentProvider`
-- 检查 authority 是否为 `website.xihan.kv`
+- 检查 authority 是否匹配
 - 确保模块应用已安装且运行
 - 清除目标应用数据
 
@@ -302,4 +344,4 @@ KVFileTransfer.saveFileUri("com.example.host", uri)
 - ⚠️ 跨进程通信依赖 ContentProvider，确保模块应用已安装和已打开
 - ⚠️ 不建议读写大量数据（建议单个 KV < 1MB）
 - ⚠️ 所有操作已线程安全，但频繁跨进程调用仍有性能开销
-- ⚠️ 文件传输需要模块端授予 URI 权限，使用 `KVFileTransfer.saveFileUri()` 自动处理
+- ⚠️ 文件传输需要模块端授予 URI 权限

@@ -11,7 +11,6 @@ import org.koin.core.component.inject
  */
 object KVSyncManager : KoinComponent {
 
-    private const val ACTION_KV_CHANGED = "website.xihan.kv.KV_CHANGED"
     private const val EXTRA_KV_ID = "kvId"
     private const val EXTRA_KEY = "key"
     private const val EXTRA_VALUE = "value"
@@ -21,9 +20,6 @@ object KVSyncManager : KoinComponent {
     private val context: Context by inject()
     private var targetPackages: MutableSet<String> = mutableSetOf()
 
-    /**
-     * 设置目标包名
-     */
     fun setTargetPackages(vararg packages: String) {
         targetPackages.clear()
         targetPackages.addAll(packages)
@@ -31,7 +27,7 @@ object KVSyncManager : KoinComponent {
 
     fun notifyChange(kvId: String, key: String, value: Any? = null, valueType: String = "null") {
         try {
-            val intent = Intent(ACTION_KV_CHANGED).apply {
+            val intent = Intent(KVContentProvider.broadcastAction).apply {
                 putExtra(EXTRA_KV_ID, kvId)
                 putExtra(EXTRA_KEY, key)
                 putExtra(EXTRA_VALUE, value?.toString())
@@ -51,10 +47,4 @@ object KVSyncManager : KoinComponent {
             Log.e(TAG, "Failed to send broadcast", e)
         }
     }
-
-    fun getChangeAction(): String = ACTION_KV_CHANGED
-    fun getKvIdExtra(): String = EXTRA_KV_ID
-    fun getKeyExtra(): String = EXTRA_KEY
-    fun getValueExtra(): String = EXTRA_VALUE
-    fun getValueTypeExtra(): String = EXTRA_VALUE_TYPE
 }

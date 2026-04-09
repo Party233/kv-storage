@@ -7,7 +7,8 @@ import kotlin.concurrent.write
 /**
  * Thread-safe LRU cache with size limit
  */
-class LruCache<K, V>(private val maxSize: Int) {
+class LruCache<K, V>(maxSize: Int) {
+    private val maxSize = maxSize.coerceAtLeast(1)
     private val cache = LinkedHashMap<K, V>(16, 0.75f, true)
     private val lock = ReentrantReadWriteLock()
 

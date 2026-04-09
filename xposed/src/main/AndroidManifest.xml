@@ -35,7 +35,7 @@
 
         <provider
             android:name="website.xihan.kv.KVContentProvider"
-            android:authorities="website.xihan.kv"
+            android:authorities="${applicationId}.kv"
             android:enabled="true"
             android:exported="true" />
     </application>
