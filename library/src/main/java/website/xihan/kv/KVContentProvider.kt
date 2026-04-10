@@ -140,18 +140,18 @@ class KVContentProvider : ContentProvider() {
         return try {
             when (uriMatcher.match(uri)) {
                 CODE_PUT -> {
-                    val (kvId, key) = uri.requireKvPath() ?: return null
+                    val (kvId, key) = uri.requireKvPath() ?: return uri
                     val type = uri.getQueryParameter("type") ?: "string"
                     val value = uri.getQueryParameter("value")
 
                     insertValue(kvId, key, type, value)
                     uri
                 }
-                else -> null
+                else -> uri
             }
         } catch (e: Exception) {
             Log.e(TAG, "Insert failed", e)
-            null
+            uri
         }
     }
 

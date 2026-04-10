@@ -65,8 +65,8 @@ class MainActivity : AppCompatActivity() {
         editText.doAfterTextChanged { ModuleConfig.textViewText = it?.toString() ?: "" }
 
         // 布尔值
-        switch1.isChecked = ModuleConfig.swithchEnable
-        switch1.setOnCheckedChangeListener { _, isChecked -> ModuleConfig.swithchEnable = isChecked }
+        switch1.isChecked = ModuleConfig.switchEnable
+        switch1.setOnCheckedChangeListener { _, isChecked -> ModuleConfig.switchEnable = isChecked }
 
         // 整数
         editTextInt.setText(ModuleConfig.intValue.toString())
@@ -152,7 +152,7 @@ class MainActivity : AppCompatActivity() {
         ModuleConfig.floatValue = randomFloat
         ModuleConfig.doubleValue = randomDouble
         ModuleConfig.longValue = randomLong
-        ModuleConfig.swithchEnable = randomBool
+        ModuleConfig.switchEnable = randomBool
         ModuleConfig.stringSetValue = randomStringSet
 
         // 更新 UI

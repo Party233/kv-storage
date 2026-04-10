@@ -13,7 +13,7 @@ object ModuleConfig : IKVOwner by KVOwner("SHARED_SETTINGS") {
     val stringDefault = ""
     val stringSetDefault = setOf("item1", "item2", "item3")
 
-    var swithchEnable by kvBool(boolDefault)
+    var switchEnable by kvBool(boolDefault)
     var textViewText by kvString(stringDefault)
     var intValue by kvInt(intDefault)
     var floatValue by kvFloat(floatDefault)

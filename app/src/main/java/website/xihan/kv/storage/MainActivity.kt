@@ -1,6 +1,7 @@
 package website.xihan.kv.storage
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -21,15 +22,20 @@ class MainActivity : AppCompatActivity() {
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
-        binding.apply {
-            textView.text = "字符串: ${getText()}"
-            switch1.isChecked = getSwitch()
-            textViewInt.text = "整数: ${getInt()}"
-            textViewFloat.text = "浮点数: ${getFloat()}"
-            textViewDouble.text = "双精度: ${getDouble()}"
-            textViewLong.text = "长整数: ${getLong()}"
-            textViewStringSet.text = "字符串集合: ${getStringSet()}"
+        updateUI()
+        binding.btnRandomData.setOnClickListener {
+            Toast.makeText(this, "随机数据按钮被点击", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    fun updateUI() = binding.apply {
+        textView.text = "字符串: ${getText()}"
+        switch1.isChecked = getSwitch()
+        textViewInt.text = "整数: ${getInt()}"
+        textViewFloat.text = "浮点数: ${getFloat()}"
+        textViewDouble.text = "双精度: ${getDouble()}"
+        textViewLong.text = "长整数: ${getLong()}"
+        textViewStringSet.text = "字符串集合: ${getStringSet()}"
     }
 
     // 返回 TextView 文本
@@ -52,6 +58,5 @@ class MainActivity : AppCompatActivity() {
 
     // 返回字符串集合
     fun getStringSet(): Set<String> = setOf("item1", "item2", "item3")
-
 
 }

@@ -58,5 +58,12 @@
         android:padding="16dp"
         android:text="字符串集合: " />
 
+    <Button
+        android:id="@+id/btnRandomData"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="随机数据" />
+
 
 </LinearLayout>

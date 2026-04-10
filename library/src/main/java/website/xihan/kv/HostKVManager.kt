@@ -2,6 +2,7 @@ package website.xihan.kv
 
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -95,7 +96,7 @@ object HostKVManager : KoinComponent {
             if (cursor.moveToFirst()) mapper(cursor.getString(0)) else null
         }
 
-    internal fun insertValue(uri: Uri) = systemContext.contentResolver.insert(uri, null)
+    internal fun insertValue(uri: Uri) = systemContext.contentResolver.insert(uri, ContentValues())
 
     internal fun Set<String>.toJson() = JSONArray(this).toString()
 
