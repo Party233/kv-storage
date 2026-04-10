@@ -12,6 +12,7 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
 import website.xihan.kv.HostKVManager
+import website.xihan.kv.HostKVHelper
 import website.xihan.kv.KVFileReceiver
 import kotlin.system.measureTimeMillis
 
@@ -34,73 +35,77 @@ class MainHook : IXposedHookLoadPackage {
                         modulePackageName = BuildConfig.APPLICATION_ID
                     )
 
-                    runCatching {
-                        val textViewText = HostKVManager.createKVHelper().getString("textViewText")
-                        Log.d(TAG, "textViewText: $textViewText")
+                    val kvHelper = HostKVManager.createKVHelper()
 
-                        XposedHelpers.findAndHookMethod(
-                            "website.xihan.kv.storage.MainActivity",
-                            lpparam.classLoader,
-                            "getText",
-                            XC_MethodReplacement.returnConstant(textViewText)
-                        )
-                    }
+                    // Hook 所有基础类型方法
+                    hookMethod(kvHelper, lpparam, "getText") { it.getString("textViewText") }
+                    hookMethod(kvHelper, lpparam, "getSwitch") { it.getBoolean("swithchEnable") }
+                    hookMethod(kvHelper, lpparam, "getInt") { it.getInt("intValue") }
+                    hookMethod(kvHelper, lpparam, "getFloat") { it.getFloat("floatValue") }
+                    hookMethod(kvHelper, lpparam, "getDouble") { it.getDouble("doubleValue") }
+                    hookMethod(kvHelper, lpparam, "getLong") { it.getLong("longValue") }
+                    hookMethod(kvHelper, lpparam, "getStringSet") { it.getStringSet("stringSetValue") }
 
-                    runCatching {
-                        val swithchEnable =
-                            HostKVManager.createKVHelper().getBoolean("swithchEnable")
-                        Log.d(TAG, "swithchEnable: $swithchEnable")
+                    // 设置变更监听器
+                    setupChangeListeners(kvHelper)
 
-                        XposedHelpers.findAndHookMethod(
-                            "website.xihan.kv.storage.MainActivity",
-                            lpparam.classLoader,
-                            "getSwitch",
-                            XC_MethodReplacement.returnConstant(swithchEnable)
-                        )
-                    }
-
-                    runCatching {
-                        HostKVManager.createKVHelper()
-                            .addChangeListener("swithchEnable") { s, any ->
-                                Log.d(TAG, "swithchEnable changed: $s,$any")
-                            }
-                    }
-
-                    runCatching {
-                        HostKVManager.createKVHelper().addChangeListener("textViewText") { s, any ->
-                            Log.d(TAG, "textViewText changed: $s,$any")
-                        }
-                    }
-
+                    // 测试批量获取
                     runCatching {
                         measureTimeMillis {
-                            val keys = setOf("swithchEnable", "textViewText")
-                            val map = HostKVManager.createKVHelper().getBatch(keys)
-                            Log.d(TAG, "getBatch: $map")
-                        }.let {
-                            Log.d(TAG, "getBatch time: ${it}")
-                        }
+                            val keys = kvHelper.keys()
+                            Log.d(TAG, "keys: $keys")
+                        }.let { Log.d(TAG, "keys time: $it") }
                     }
 
-                    runCatching {
-                        val receiveFile = KVFileReceiver(application)
-                        receiveFile.receiveFile()?.let { file ->
-                            Log.d(TAG, "File saved to: ${file.absolutePath}")
-                        }
-                        receiveFile.observeFile { file ->
-                            Log.d(TAG, "File updated and saved to: ${file.absolutePath}")
-                        }
-                    }.onFailure {
-                        Log.e(TAG, "Failed to setup file receiver", it)
+                    // 文件接收
+                    setupFileReceiver(application)
+                }
+            }
+        )
+    }
+
+    private inline fun <T> hookMethod(
+        kvHelper: HostKVHelper,
+        lpparam: XC_LoadPackage.LoadPackageParam,
+        methodName: String,
+        getter: (HostKVHelper) -> T
+    ) {
+        runCatching {
+            val value = getter(kvHelper)
+            Log.d(TAG, "$methodName: $value")
+            XposedHelpers.findAndHookMethod(
+                "website.xihan.kv.storage.MainActivity",
+                lpparam.classLoader,
+                methodName,
+                XC_MethodReplacement.returnConstant(value)
+            )
+        }.onFailure { Log.e(TAG, "Failed to hook $methodName", it) }
+    }
+
+    private fun setupChangeListeners(kvHelper: HostKVHelper) {
+        kvHelper.keys()
+            .forEach { key ->
+                runCatching {
+                    kvHelper.addChangeListener(key) { s, any ->
+                        Log.d(TAG, "$key changed: $s, $any")
                     }
                 }
             }
+    }
 
-        )
+    private fun setupFileReceiver(application: Application) {
+        runCatching {
+            val receiveFile = KVFileReceiver(application)
+            receiveFile.receiveFile()?.let { file ->
+                Log.d(TAG, "File saved to: ${file.absolutePath}")
+            }
+            receiveFile.observeFile { file ->
+                Log.d(TAG, "File updated and saved to: ${file.absolutePath}")
+            }
+        }.onFailure { Log.e(TAG, "Failed to setup file receiver", it) }
     }
 
     companion object {
         const val TAG = "KV-XPOSED"
     }
-
 }

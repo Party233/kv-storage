@@ -1,12 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="25dp"
+    android:fillViewport="true"
     tools:context=".MainActivity">
+
+<LinearLayout
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="25dp">
 
     <EditText
         android:id="@+id/editText"
@@ -39,4 +44,126 @@
         android:text="未选择文件"
         android:textSize="12sp" />
 
+    <EditText
+        android:id="@+id/editTextInt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:hint="整数值"
+        android:inputType="number"
+        android:padding="16dp" />
+
+    <EditText
+        android:id="@+id/editTextFloat"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="浮点数"
+        android:inputType="numberDecimal"
+        android:padding="16dp" />
+
+    <EditText
+        android:id="@+id/editTextDouble"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="双精度浮点数"
+        android:inputType="numberDecimal"
+        android:padding="16dp" />
+
+    <EditText
+        android:id="@+id/editTextLong"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="长整数"
+        android:inputType="number"
+        android:padding="16dp" />
+
+    <EditText
+        android:id="@+id/editTextStringSet"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="字符串集合 (逗号分隔)"
+        android:padding="16dp" />
+
+    <EditText
+        android:id="@+id/editTextRemoveKey"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:hint="要删除的键名"
+        android:padding="16dp" />
+
+    <Button
+        android:id="@+id/btnRemove"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="删除指定键" />
+
+    <Button
+        android:id="@+id/btnClearAll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="清除所有数据" />
+
+    <Button
+        android:id="@+id/btnClearCache"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="清除缓存" />
+
+    <Button
+        android:id="@+id/btnRandomData"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="随机数据" />
+
+    <Button
+        android:id="@+id/btnShowKeys"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="显示所有键" />
+
+    <TextView
+        android:id="@+id/tvKeysResult"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:padding="16dp"
+        android:text="键列表: "
+        android:textSize="12sp" />
+
+    <EditText
+        android:id="@+id/editTextContainsKey"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="要检查是否存在的键名"
+        android:padding="16dp" />
+
+    <Button
+        android:id="@+id/btnContains"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="检查键是否存在" />
+
+    <TextView
+        android:id="@+id/tvContainsResult"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:padding="16dp"
+        android:text="检查结果: "
+        android:textSize="14sp" />
+
 </LinearLayout>
+
+</ScrollView>

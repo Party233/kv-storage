@@ -22,8 +22,13 @@ class MainActivity : AppCompatActivity() {
             insets
         }
         binding.apply {
-            textView.text = getText()
+            textView.text = "字符串: ${getText()}"
             switch1.isChecked = getSwitch()
+            textViewInt.text = "整数: ${getInt()}"
+            textViewFloat.text = "浮点数: ${getFloat()}"
+            textViewDouble.text = "双精度: ${getDouble()}"
+            textViewLong.text = "长整数: ${getLong()}"
+            textViewStringSet.text = "字符串集合: ${getStringSet()}"
         }
     }
 
@@ -32,4 +37,21 @@ class MainActivity : AppCompatActivity() {
 
     // 返回 Switch 状态
     fun getSwitch(): Boolean = false
+
+    // 返回整数
+    fun getInt(): Int = 42
+
+    // 返回浮点数
+    fun getFloat(): Float = 3.14f
+
+    // 返回双精度浮点数
+    fun getDouble(): Double = 2.71828
+
+    // 返回长整数
+    fun getLong(): Long = 123456789L
+
+    // 返回字符串集合
+    fun getStringSet(): Set<String> = setOf("item1", "item2", "item3")
+
+
 }

@@ -12,16 +12,51 @@
         android:id="@+id/textView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="25dp"
-        android:text="TextView" />
+        android:padding="16dp"
+        android:text="字符串: " />
 
 
     <Switch
         android:id="@+id/switch1"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="25dp"
-        android:text="Switch" />
+        android:padding="16dp"
+        android:text="布尔值" />
+
+    <TextView
+        android:id="@+id/textViewInt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:text="整数: " />
+
+    <TextView
+        android:id="@+id/textViewFloat"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:text="浮点数: " />
+
+    <TextView
+        android:id="@+id/textViewDouble"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:text="双精度: " />
+
+    <TextView
+        android:id="@+id/textViewLong"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:text="长整数: " />
+
+    <TextView
+        android:id="@+id/textViewStringSet"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:text="字符串集合: " />
 
 
 </LinearLayout>
