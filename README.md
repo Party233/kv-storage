@@ -20,9 +20,9 @@
 
 ## 模块说明
 
-- **library**: 核心 KV 存储库
-- **app**: 示例应用
-- **xposed**: Xposed 模块实现
+- **library**: 核心 KV 存储库，提供跨进程数据同步功能
+- **app**: 宿主端演示应用，作为 Xposed 模块的 Hook 目标，展示基础数据类型
+- **xposed**: Xposed 模块实现，演示如何 Hook 目标应用并读写其数据
 
 ## 依赖
 
@@ -108,6 +108,14 @@ HostKVManager.init(enableSharedPreferencesCache = true, modulePackageName = Buil
 
 ### Xposed 模块集成
 
+xposed 模块是配套演示模块，用于演示如何 Hook 目标应用并读写其数据：
+
+- Hook 目标应用 `website.xihan.kv.storage`
+- 替换方法返回值实现数据展示
+- 监听配置变更自动刷新
+- 支持随机数据生成并回写到宿主端
+- 支持文件传输接收
+
 #### AndroidManifest.xml 声明
 
 ```xml
@@ -141,12 +149,10 @@ if (ModuleConfig.containsKV("switchEnable")) { ... }
 // 删除单个键
 ModuleConfig.removeKV("count")
 
-// 批量设置
-ModuleConfig.putAllKV(mapOf(
-    "switchEnable" to true,
-    "textViewText" to "hello",
-    "count" to 100
-))
+// 批量设置（逐条写入）
+ModuleConfig.switchEnable = true
+ModuleConfig.textViewText = "hello"
+ModuleConfig.count = 100
 
 // 获取所有数据
 val allData = ModuleConfig.getAllKV()
@@ -174,13 +180,11 @@ if (KVStorage.contains("SHARED_SETTINGS", "textViewText")) {
     KVStorage.remove("SHARED_SETTINGS", "textViewText")
 }
 
-// 批量操作
-KVStorage.putAll("SHARED_SETTINGS", mapOf(
-    "switchEnable" to true,
-    "textViewText" to "123456",
-    "count" to 100,
-    "ratio" to 3.14
-))
+// 批量操作（逐条写入）
+KVStorage.putBoolean("SHARED_SETTINGS", "switchEnable", true)
+KVStorage.putString("SHARED_SETTINGS", "textViewText", "123456")
+KVStorage.putInt("SHARED_SETTINGS", "count", 100)
+KVStorage.putDouble("SHARED_SETTINGS", "ratio", 3.14)
 
 // 清除所有数据
 KVStorage.clearAll("SHARED_SETTINGS")
@@ -205,11 +209,11 @@ if (helper.contains("textViewText")) {
     helper.remove("textViewText")
 }
 
-// 批量操作
-helper.putAll(mapOf(
-    "switchEnable" to true,
-    "textViewText" to "123456"
-))
+// 批量操作（逐条写入或使用操作符）
+helper.putString("textViewText", "hello")
+helper.putBoolean("switchEnable", false)
+// 或使用 += 操作符
+helper += ("count" to 100)
 
 // 添加变化监听
 helper.addChangeListener("switchEnable") { key, value ->
@@ -223,14 +227,33 @@ helper.clearCache()
 helper.clearAll()
 ```
 
-### 批量查询
+### 操作符重载
 
-一次 IPC 调用查询多个键值，性能提升 10-100 倍：
+HostKVHelper 支持简洁的操作符写法：
 
 ```kotlin
-// 宿主端
-val keys = setOf("swithchEnable", "textViewText")
-val map = HostKVManager.createKVHelper().getBatch(keys)
+val helper = HostKVManager.createKVHelper("SHARED_SETTINGS")
+
+// [] 操作符 - 字符串读写
+helper["textViewText"] = "hello"       // 等同于 putString
+val text = helper["textViewText"]      // 等同于 getString (返回 String?)
+
+// += 操作符 - 单条赋值
+helper += ("count" to 100)             // 自动识别类型
+helper += ("enabled" to true)
+```
+
+### 其他操作
+
+```kotlin
+// 获取所有键
+val allKeys = helper.keys()
+
+// 配置缓存大小
+helper.configureCacheSize(200)
+
+// 移除监听器
+helper.removeChangeListener("switchEnable", listener)
 ```
 
 ### 文件传输
